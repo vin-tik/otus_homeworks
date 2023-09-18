@@ -36,4 +36,4 @@ jobs:
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
     - name: Test with test_log_parser
       run: |
-        test_log_parser
+        test_log_parser.py
