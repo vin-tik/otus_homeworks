@@ -2,6 +2,9 @@
 # coding: utf-8
 
 # -*- coding: utf-8 -*-
+"""Log parser.
+"""
+
 from argparse import ArgumentParser
 import datetime
 import gzip
@@ -21,6 +24,8 @@ CONFIG_FROM_FILE = './config.json'
 
 
 def load_config(config_path):
+    '''Load config file if it exists.
+    '''
     try:
         with open(config_path, 'r', encoding='utf-8') as conf:
             config_file = json.load(conf)
@@ -31,6 +36,8 @@ def load_config(config_path):
 
 
 def create_args_parser(CONFIG_FROM_FILE):
+    '''Create arguments parse.
+    '''
     parser = ArgumentParser()
     parser.add_argument('--config', help='config path',
                         default=CONFIG_FROM_FILE)
@@ -38,6 +45,8 @@ def create_args_parser(CONFIG_FROM_FILE):
 
 
 def does_dir_exists(dirpath):
+    '''Check if dir exests.
+    '''
     if not os.path.exists(dirpath):
         logging.info("directory doesn't exist")
         return False
@@ -45,6 +54,8 @@ def does_dir_exists(dirpath):
 
 
 def is_dir_empty(dirpath):
+    '''Check if dir empty.
+    '''
     if not os.listdir(dirpath):
         logging.info("directory is empty")
         return True
@@ -52,6 +63,9 @@ def is_dir_empty(dirpath):
 
 
 def check_dir(dirpath):
+    '''Complex dir check.
+    If it's emty or doesn't exists, func returns False.
+    '''
     if does_dir_exists(dirpath) and not is_dir_empty(dirpath):
         return True
     return False
@@ -64,6 +78,8 @@ def str_date(string):
 
 
 def get_last_log(logdir):
+    '''Looking for latest log in dir.
+    '''
     last_logdate = None
     pattern = re.compile('^nginx-access-ui.log-(\d{8})')
     if check_dir(logdir):
@@ -87,6 +103,8 @@ def get_last_log(logdir):
 
 
 def median(numbers_list):
+    '''Compute median.
+    '''
     sorted_numbers_list = sorted(numbers_list)
     length = len(numbers_list)
     middle = length // 2
@@ -101,6 +119,8 @@ def median(numbers_list):
 
 
 def process_line(line):
+    '''Parse log lines.
+    '''
     try:
         url = line.split('"')[1].replace('GET ', '')
         http_idx = url.find(' HTT')
@@ -113,6 +133,9 @@ def process_line(line):
 
 
 def xreadlines(log_path, errors_threshold):
+    '''Read and parse log.
+    Yields parsed log lines.
+    '''
     try:
         log = (gzip.open(log_path, 'rb')
                if log_path.endswith(".gz")
@@ -137,6 +160,9 @@ def xreadlines(log_path, errors_threshold):
 
 
 def url_timepoints_dict(log):
+    '''Create dict
+    "{'url': [timepoint1, timepoint2, ...]}" format
+    '''
     pivot_dict = {}
     for url, time in log:
         if url not in pivot_dict:
@@ -146,11 +172,16 @@ def url_timepoints_dict(log):
 
 
 def time_sum(url_time_dict):
+    '''Yields url and its timesum.
+    '''
     for url, timepoints in url_time_dict.items():
         yield url, sum(timepoints)
 
 
 def sorted_reqs(url_time_dict, report_size):
+    '''Sort url dict by timesum (descending).
+    Func returns first "report_size" pairs.
+    '''
     url_time_sum = dict(time_sum(url_time_dict))
 
     report = dict(
@@ -168,10 +199,14 @@ def sorted_reqs(url_time_dict, report_size):
 
 
 def dict_length(d):
+    '''Return dict pairs count.
+    '''
     return len(list(d))
 
 
 def all_reqs_timesum(utd):
+    '''General timesum of all requests.
+    '''
     timesum = 0
     for _, timepoints in utd.items():
         timesum += sum(timepoints)
@@ -179,10 +214,14 @@ def all_reqs_timesum(utd):
 
 
 def round3(number):
+    '''Round number to 3 digits after the period.
+    '''
     return round(number, ndigits=3)
 
 
 def full_report(url_time_dict, max_time_sample, log):
+    '''Log statistics computing.
+    '''
     urls_table = []
     colnames = ['url', 'count', 'count_perc',
                 'time_avg', 'time_max', 'time_med',
@@ -211,11 +250,15 @@ def full_report(url_time_dict, max_time_sample, log):
 
 
 def errors_percent(errors_count, utd):
+    '''Count log lines processing errors.   
+    '''
     all_urls_count = len(list(utd))
     return (errors_count / all_urls_count) * 100
 
 
 def render_report(report_path, content):
+    '''Create and render html report.
+    '''
     try:
         with open("report.html", "r") as report:
             page = report.read()
