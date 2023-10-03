@@ -12,8 +12,10 @@ from pyclbr import Class
 import re
 import uuid
 from optparse import OptionParser
+from scoring import get_score, get_interests
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+empty_field = [[], (), {}, '', None]
 SALT = "Otus"
 ADMIN_LOGIN = "admin"
 ADMIN_SALT = "42"
@@ -40,6 +42,7 @@ GENDERS = {
 }
 
 
+
 class Field:
     """Common field value validation.
     """
@@ -47,7 +50,6 @@ class Field:
     def __init__(self, required, nullable):
         self.required = required
         self.nullable = nullable
-        self.empty_field = [[], (), {}, '', None]
 
     def is_empty(self, inp):
         '''Check if field value is empty.
@@ -64,7 +66,7 @@ class Field:
         if self.required and self.is_empty(inp):
             raise ValueError("Поле должно быть заполнено")
 
-        if not self.nullable and inp in self.empty_field:
+        if not self.nullable and inp in empty_field:
             raise ValueError("Поле не может быть пустым")
 
 
@@ -161,6 +163,8 @@ class GenderField(Field):
     """
 
     def validate(self, inp):
+        '''Field validation.
+        '''
         super().check_inp(inp)
         if inp not in GENDERS:
             raise ValueError("Значение должно быть 0, 1 или 2")
@@ -209,7 +213,21 @@ class OnlineScoreRequest:
                             См. требования по заполнению''')
 
 
-class MethodRequest:
+class Request:
+    '''Main request class.
+    Contains request attributes.
+    '''
+
+    def __init__(self, request, ctx):
+        self.ctx = ctx
+
+        for fieldname, value in request.items():
+            setattr(self, fieldname, value)
+            if value not in empty_field:
+                self.ctx['has'] += [fieldname]
+
+
+class MethodRequest(Request):
     """Get account and method data if validated.
     """
 
@@ -221,10 +239,15 @@ class MethodRequest:
 
     @property
     def is_admin(self):
+        '''Check if user is admin.
+        '''
         return self.login == ADMIN_LOGIN
 
 
 def check_auth(request):
+    '''Authentication.
+    '''
+
     if request.is_admin:
         digest = hashlib.sha512(datetime.datetime.now().strftime("%Y%m%d%H") + ADMIN_SALT).hexdigest()
     else:
@@ -234,12 +257,62 @@ def check_auth(request):
     return False
 
 
+def online_score(req_fields: MethodRequest, store):
+    '''Run online score method.
+    '''
+    req = OnlineScoreRequest(req_fields)
+
+    if req.is_admin():
+        score = 42
+    else:
+        score = get_score(store,
+                          req.phone,
+                          req.email,
+                          req.birthday,
+                          req.gender,
+                          req.first_name,
+                          req.last_name)
+
+    return {"score": score}, OK
+
+def clients_interests(req_fields: MethodRequest, store):
+    '''Run clients interests method.
+    '''
+
+    req = ClientsInterestsRequest(req_fields)
+
+    req.ctx["nclients"] = len(req.client_ids)
+    response = {clid: get_interests(store, clid)
+                for clid
+                in req.client_ids}
+    return response, OK
+
+
 def method_handler(request, ctx, store):
+    '''Run methods.
+    '''
+
     response, code = None, None
+    handlers = {
+        "online_score": online_score,
+        "clients_interests": clients_interests
+    }
+
+    method_fields = MethodRequest(request['body'])
+
+    if not method_fields:
+        return 'Invalid request', INVALID_REQUEST
+    if not check_auth(method_fields):
+        return 'Forbidden', FORBIDDEN
+
+    response, code = handlers[method_fields.method](method_fields, ctx, store)
     return response, code
 
 
 class MainHTTPHandler(BaseHTTPRequestHandler):
+    '''Handle client requests, do POST.
+    '''
+
     router = {
         "method": method_handler
     }
@@ -264,8 +337,8 @@ class MainHTTPHandler(BaseHTTPRequestHandler):
             if path in self.router:
                 try:
                     response, code = self.router[path]({"body": request, "headers": self.headers}, context, self.store)
-                except Exception as e:
-                    logging.exception("Unexpected error: %s" % e)
+                except Exception as exc:
+                    logging.exception("Unexpected error: %s" % exc)
                     code = INTERNAL_ERROR
             else:
                 code = NOT_FOUND
@@ -274,12 +347,12 @@ class MainHTTPHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         if code not in ERRORS:
-            r = {"response": response, "code": code}
+            resp = {"response": response, "code": code}
         else:
-            r = {"error": response or ERRORS.get(code, "Unknown Error"), "code": code}
-        context.update(r)
+            resp = {"error": response or ERRORS.get(code, "Unknown Error"), "code": code}
+        context.update(resp)
         logging.info(context)
-        self.wfile.write(json.dumps(r))
+        self.wfile.write(json.dumps(resp))
         return
 
 
