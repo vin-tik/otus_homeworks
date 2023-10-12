@@ -13,6 +13,7 @@ import re
 import uuid
 from optparse import OptionParser
 from scoring import get_score, get_interests
+import store
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 empty_field = [[], (), {}, '', None]
@@ -40,7 +41,6 @@ GENDERS = {
     MALE: "male",
     FEMALE: "female",
 }
-
 
 
 class Field:
@@ -316,7 +316,7 @@ class MainHTTPHandler(BaseHTTPRequestHandler):
     router = {
         "method": method_handler
     }
-    store = None
+    store = store.Store(store.TarantoolStorage())
 
     def get_request_id(self, headers):
         return headers.get('HTTP_X_REQUEST_ID', uuid.uuid4().hex)
