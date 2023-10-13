@@ -2,7 +2,6 @@
 """
 
 import unittest
-from unittest.mock import Mock
 import store
 import tarantool
 
@@ -16,10 +15,11 @@ class TarantoolStoreTest(unittest.TestCase):
         with getting random key.
         '''
 
+        test_key = 'key'
         tarantool_storage = store.TarantoolStorage()
         storage = store.Store(tarantool_storage)
         with self.assertRaises(tarantool.DatabaseError()):
-            storage.get("key")
+            storage.get(test_key)
 
 
     def test_none_from_cache(self):
@@ -27,23 +27,23 @@ class TarantoolStoreTest(unittest.TestCase):
         with pushing random key.
         '''
 
+        test_key, test_value = 'key', 'value'
         tarantool_storage = store.TarantoolStorage()
         storage = store.Store(tarantool_storage)
-        self.assertEqual(storage.cache_get("key"), None)
-        self.assertEqual(storage.cache_set("key", "value"), None)
+        self.assertEqual(storage.cache_get(test_key), None)
+        self.assertEqual(storage.cache_set(test_key, test_value), None)
 
 
     def test_retries(self):
-        '''Сhecks whether the function is
+        '''Checks whether the function is
         reconnected when accessing the cache.
         '''
 
         tarantool_storage = store.TarantoolStorage()
-        tarantool_storage.get = Mock(side_effect=tarantool.DatabaseError())
-        tarantool_storage.set = Mock(side_effect=tarantool.DatabaseError())
-
         storage = store.Store(tarantool_storage)
-        self.assertEqual(tarantool_storage.connection().reconnect_max_attempts, storage.RETRIES)
+        tarantool_retries = tarantool_storage.connection().reconnect_max_attempts
+        
+        self.assertEqual(tarantool_retries, storage.RETRIES)
 
 if __name__ == "__main__":
     unittest.main()
