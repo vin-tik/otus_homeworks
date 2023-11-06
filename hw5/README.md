@@ -7,6 +7,7 @@
 
 ## Нагрузочное тестирование ApacheBenchmark
 
+```
 $ ab -n 50000 -c 100 -r http://localhost:8080/
 Completed 5000 requests
 Completed 10000 requests
@@ -56,3 +57,4 @@ Percentage of the requests served within a certain time (ms)
   98%      7
   99%      9
  100%     17 (longest request)
+ ```
