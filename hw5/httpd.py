@@ -26,7 +26,6 @@ def get_args():
     return args_parser.parse_args()
 
 class RequestError(Exception):
-
     def __init__(self, exception):
         self.exception = exception
 
