@@ -25,6 +25,11 @@ def get_args():
     args_parser.add_argument('-r', '--document-root', default=DOCUMENT_ROOT, help='Document root folder')
     return args_parser.parse_args()
 
+class RequestError(Exception):
+
+    def __init__(self, exception):
+        self.exception = exception
+
 class BaseServer:
     def __init__(self, host, port, max_workers, document_root):
         self.host = host
@@ -67,17 +72,17 @@ class ConnectHandler:
         rfile = c_socket.makefile('rb')
         raw = rfile.readline(maxline + 1)
         if len(raw) > maxline:
-            raise Exception('Request line is too long')
+            raise RequestError('Request line is too long')
 
         req_line = str(raw, 'iso-8859-1')
         req_line = req_line.rstrip('\r\n')
         req_parts = req_line.split()
         if len(req_parts) != 3:
-            raise Exception('Malformed request line')
+            raise RequestError('Malformed request line')
 
         method, url, httpv = req_parts
         if httpv != 'HTTP/1.1':
-            raise Exception('Unexpected HTTP version')
+            raise RequestError('Unexpected HTTP version')
 
         url = urllib.parse.unquote(url, encoding='utf-8', errors='replace')
         url = urllib.parse.urlparse(url).path
