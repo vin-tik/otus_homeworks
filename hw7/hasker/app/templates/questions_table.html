@@ -1,0 +1,14 @@
+
+            <tr class="align-bottom">
+                <td>{{ question.votes.count }} Votes</td>
+                <td>{{ question.answers|length }} Answers</td>
+                <td class="align-top"><a href="">{{ question.title }}</a></td>
+                <td class="align-top"><a href="">{{ question.author|title }}<a></a></td>
+                <td>asked {{ question.created_date|timesince:from_date }} ago</td>
+                <td>
+                    {% for tag in question.tags.all %}
+                    <span class="badge badge-pill" style="background-color: #9370DB;">{{ tag }}</span>
+                    {% endfor %}
+                </td>
+
+            </tr>

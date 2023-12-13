@@ -1,0 +1,14 @@
+django
+django-admin-honeypot==1.0.0
+django-bootstrap5
+django-debug-toolbar==1.8
+django-extensions==3.1.0
+djangorestframework==3.11.1
+docker-compose==1.28.2
+drf-yasg==1.20.0
+gunicorn
+psycopg2-binary==2.8.5
+python-decouple==3.3
+Pillow==4.2.1
+uWSGI==2.0.15
+whitenoise==5.1.0
