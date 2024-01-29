@@ -13,10 +13,19 @@ from optparse import OptionParser
 import appsinstalled_pb2
 # pip install python-memcached
 import memcache
+import threading
+import Queue
 
 NORMAL_ERR_RATE = 0.01
 AppsInstalled = collections.namedtuple("AppsInstalled", ["dev_type", "dev_id", "lat", "lon", "apps"])
 
+config = {
+    'MEMC_MAX_RETRIES': 1,
+    'MEMC_TIMEOUT': 2,
+    'MAX_JOB_QUEUE_SIZE': 5000,
+    'MAX_RESULT_QUEUE_SIZE': 5000,
+    'THREADS_COUNT': 4,
+}
 
 def dot_rename(path):
     head, fn = os.path.split(path)
@@ -24,21 +33,29 @@ def dot_rename(path):
     os.rename(path, os.path.join(head, "." + fn))
 
 
-def insert_appsinstalled(memc_addr, appsinstalled, dry_run=False):
+def insert_appsinstalled(memc_pool, memc_addr, appsinstalled, dry_run=False):
     ua = appsinstalled_pb2.UserApps()
     ua.lat = appsinstalled.lat
     ua.lon = appsinstalled.lon
     key = "%s:%s" % (appsinstalled.dev_type, appsinstalled.dev_id)
     ua.apps.extend(appsinstalled.apps)
     packed = ua.SerializeToString()
-    # @TODO persistent connection
-    # @TODO retry and timeouts!
     try:
         if dry_run:
             logging.debug("%s - %s -> %s" % (memc_addr, key, str(ua).replace("\n", " ")))
         else:
-            memc = memcache.Client([memc_addr])
-            memc.set(key, packed)
+            try:
+                memc = memc_pool.get(timeout=0.1)
+            except Queue.Empty:
+                memc = memcache.Client([memc_addr], socket_timeout=config['MEMC_TIMEOUT'])
+            is_ok = False
+            max_retries = config['MEMC_MAX_RETRIES']
+            for _ in range(max_retries):
+                is_ok = memc.set(key, packed)
+                if is_ok:
+                    break
+            memc_pool.put(memc)
+            return is_ok
     except Exception as e:
         logging.exception("Cannot write to memc %s: %s" % (memc_addr, e))
         return False
@@ -64,47 +81,115 @@ def parse_appsinstalled(line):
     return AppsInstalled(dev_type, dev_id, lat, lon, apps)
 
 
-def main(options):
+def get_logfile_size(fn):
+    with gzip.open(fn) as fd:
+        logsize = len(fd)
+    return logsize
+
+
+def logfile_to_queue(fn, queue):
+    with gzip.open(fn) as fd:
+        for container in range(0, len(fd), config['MAX_JOB_QUEUE_SIZE']):
+            queue.put([container])
+
+
+def log2memc(queue, result_q, options):
     device_memc = {
         "idfa": options.idfa,
         "gaid": options.gaid,
         "adid": options.adid,
         "dvid": options.dvid,
     }
-    for fn in glob.iglob(options.pattern):
-        processed = errors = 0
-        logging.info('Processing %s' % fn)
-        fd = gzip.open(fn)
-        for line in fd:
-            line = line.strip()
-            if not line:
-                continue
-            appsinstalled = parse_appsinstalled(line)
-            if not appsinstalled:
-                errors += 1
-                continue
-            memc_addr = device_memc.get(appsinstalled.dev_type)
-            if not memc_addr:
-                errors += 1
-                logging.error("Unknow device type: %s" % appsinstalled.dev_type)
-                continue
-            ok = insert_appsinstalled(memc_addr, appsinstalled, options.dry)
-            if ok:
-                processed += 1
-            else:
-                errors += 1
-        if not processed:
-            fd.close()
-            dot_rename(fn)
-            continue
 
+    processed = errors = 0
+
+    while True:
+        try:
+            lines = queue.get()
+        except Queue.Empty:
+            result_q.put((processed, errors))
+
+        else:
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                appsinstalled = parse_appsinstalled(line)
+                if not appsinstalled:
+                    errors += 1
+                    continue
+                memc_addr = device_memc.get(appsinstalled.dev_type)
+                if not memc_addr:
+                    errors += 1
+                    logging.error("Unknown device type: %s" % appsinstalled.dev_type)
+                    continue
+                ok = insert_appsinstalled(memc_addr, appsinstalled, options.dry)
+                if ok:
+                    processed += 1
+                else:
+                    errors += 1
+                if not processed:
+                    continue
+
+            result_q.put((processed, errors))
+            queue.task_done()
+
+
+def threaded_log_processing(fn, options):
+    processed = errors = 0
+
+    addition_threads = []
+    loglines_queue = Queue.Queue()
+    processing_report_queue = Queue.Queue()
+    threads_count = get_logfile_size(fn) // config['MAX_JOB_QUEUE_SIZE']
+
+    logging.info('Processing %s' % fn)
+
+    # создаем и запускаем threads, которые будут добавлять в очередь
+    # по f'{config['MAX_JOB_QUEUE_SIZE']}' строк из лога
+    for _ in range(threads_count):
+        addition_thread = threading.Thread(target=logfile_to_queue,
+                                             args=(loglines_queue,))
+        addition_thread.daemon = True
+        addition_threads.append(addition_thread)
+
+    for add_thread in addition_threads:
+        add_thread.start()
+
+    # создаем и запускаем threads, которые запускают обработку частей лога из loglines_queue
+    proc_threads = []
+    for _ in range(threads_count):
+        proc_thread = threading.Thread(target=log2memc, args=(loglines_queue,
+                                                                  processing_report_queue,
+                                                                  options,))
+        proc_thread.daemon = True
+        proc_threads.append(proc_thread)
+
+    for p_thread in proc_threads:
+        p_thread.start()
+
+    for add_thread in addition_threads:
+        if add_thread.is_alive():
+            add_thread.join()
+
+    while not processing_report_queue.empty():
+        processed_per_thread, errors_per_thread = processing_report_queue.get()
+        processed += processed_per_thread
+        errors += errors_per_thread
+
+    if processed:
         err_rate = float(errors) / processed
         if err_rate < NORMAL_ERR_RATE:
             logging.info("Acceptable error rate (%s). Successfull load" % err_rate)
         else:
             logging.error("High error rate (%s > %s). Failed load" % (err_rate, NORMAL_ERR_RATE))
-        fd.close()
         dot_rename(fn)
+    else: dot_rename(fn)
+
+
+def main(options):
+    for fn in glob.iglob(options.pattern):
+        threaded_log_processing(fn, options)
 
 
 def prototest():
@@ -146,72 +231,3 @@ if __name__ == '__main__':
     except Exception as e:
         logging.exception("Unexpected error: %s" % e)
         sys.exit(1)
-
-
-
-#################################################
-#################################################
-        
-def handle_logfile(fn, options):
-    device_memc = {
-        "idfa": options.idfa,
-        "gaid": options.gaid,
-        "adid": options.adid,
-        "dvid": options.dvid,
-    }
-
-    pools = collections.defaultdict(Queue.Queue)
-    job_queue = Queue.Queue(maxsize=config['MAX_JOB_QUEUE_SIZE'])
-    result_queue = Queue.Queue(maxsize=config['MAX_RESULT_QUEUE_SIZE'])
-
-    workers = []
-    for i in range(config['THREADS_PER_WORKER']):
-        thread = threading.Thread(target=handle_task, args=(job_queue, result_queue))
-        thread.daemon = True
-        workers.append(thread)
-
-    for thread in workers:
-        thread.start()
-
-    processed = errors = 0
-    logging.info('Processing %s' % fn)
-
-    with gzip.open(fn) as fd:
-        for line in fd:
-            line = line.strip()
-            if not line:
-                continue
-
-            appsinstalled = parse_appsinstalled(line)
-            if not appsinstalled:
-                errors += 1
-                continue
-
-            memc_addr = device_memc.get(appsinstalled.dev_type)
-            if not memc_addr:
-                errors += 1
-                logging.error("Unknow device type: %s" % appsinstalled.dev_type)
-                continue
-
-            job_queue.put((pools[memc_addr], memc_addr, appsinstalled, options.dry))
-
-            if not all(thread.is_alive() for thread in workers):
-                break
-
-    for thread in workers:
-        if thread.is_alive():
-            thread.join()
-
-    while not result_queue.empty():
-        processed_per_worker, errors_per_worker = result_queue.get()
-        processed += processed_per_worker
-        errors += errors_per_worker
-
-    if processed:
-        err_rate = float(errors) / processed
-        if err_rate < NORMAL_ERR_RATE:
-            logging.info("Acceptable error rate (%s). Successfull load" % err_rate)
-        else:
-            logging.error("High error rate (%s > %s). Failed load" % (err_rate, NORMAL_ERR_RATE))
-
-    return fn
