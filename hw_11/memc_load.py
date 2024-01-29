@@ -145,8 +145,8 @@ def threaded_log_processing(fn, options):
 
     logging.info('Processing %s' % fn)
 
-    # создаем и запускаем threads, которые будут добавлять в очередь
-    # по f'{config['MAX_JOB_QUEUE_SIZE']}' строк из лога
+    # создаем и запускаем threads, которые добавляют в очередь
+    # по N строк из лога (N указывается в конфиге)
     for _ in range(threads_count):
         addition_thread = threading.Thread(target=logfile_to_queue,
                                              args=(loglines_queue,))
@@ -156,7 +156,8 @@ def threaded_log_processing(fn, options):
     for add_thread in addition_threads:
         add_thread.start()
 
-    # создаем и запускаем threads, которые запускают обработку частей лога из loglines_queue
+    # создаем и запускаем threads,
+    # которые запускают обработку частей лога из loglines_queue
     proc_threads = []
     for _ in range(threads_count):
         proc_thread = threading.Thread(target=log2memc, args=(loglines_queue,
