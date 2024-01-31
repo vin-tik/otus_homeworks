@@ -29,7 +29,104 @@ def dot_rename(path):
     os.rename(path, os.path.join(head, "." + fn))
 
 
-def insert_appsinstalled(memc_pool, memc_addr, appsinstalled, dry_run=False):
+##########################################################
+#                       SET MULTI           
+#                         ***
+#                        START
+##########################################################
+
+def get_key_and_serialized_data(appsinstalled):
+    ua = appsinstalled_pb2.UserApps()
+    ua.lat = appsinstalled.lat
+    ua.lon = appsinstalled.lon
+    key = "%s:%s" % (appsinstalled.dev_type, appsinstalled.dev_id)
+    ua.apps.extend(appsinstalled.apps)
+    packed = ua.SerializeToString()
+    return key, packed
+
+def insert_appsinstalled(memc, serialized, dry_run=False):
+    processed = errors = 0
+    try:
+        if dry_run:
+            for key, value in serialized.items():
+                logging.debug('%s - %s -> %s' % (memc, key, value))
+                processed += 1
+        else:
+            processed, errors = memc_set_multi(memc, serialized)
+    except Exception as e:
+        logging.exception('Cannot write to memc %s: %s' % (memc.servers[0], e))
+    return processed, errors
+
+
+def memc_set_multi(memc, serialized):
+    max_retries = config['MEMC_MAX_RETRIES']
+    first_retry = memc.set_multi(serialized)
+    for _ in range(max_retries-1):
+        retry_n = memc.set_multi({
+                                   key: serialized[key]
+                                   for key in first_retry
+                                })
+    errors = len(retry_n)
+    return len(serialized.keys()) - errors, errors
+
+
+def log2memc(queue, result_q, options):
+    key_packed_mapping = {}
+
+    device_memc = {
+        "idfa": options.idfa,
+        "gaid": options.gaid,
+        "adid": options.adid,
+        "dvid": options.dvid,
+    }
+
+    for dev_type, memc_addr in device_memc.items():
+        key_packed_mapping[dev_type] = {}
+
+    processed = errors = 0
+    while True:
+        try:
+            lines = queue.get()
+        except Queue.Empty:
+            result_q.put((processed, errors))
+
+        else:
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                appsinstalled = parse_appsinstalled(line)
+                if not appsinstalled:
+                    errors += 1
+                    continue
+                dev_type = appsinstalled.dev_type
+                memc_addr = device_memc.get(dev_type)
+                memc = memcache.Client([memc_addr])
+                if not memc_addr:
+                    errors += 1
+                    logging.error("Unknown device type: %s" % appsinstalled.dev_type)
+                    continue
+                key, sd = get_key_and_serialized_data(appsinstalled)
+
+                key_packed = key_packed_mapping[dev_type]
+                key_packed[key] = sd
+
+            proc, errs = insert_appsinstalled(memc, key_packed)
+
+            processed += proc
+            errors += errs
+
+            result_q.put((processed, errors))
+            queue.task_done()
+
+##########################################################
+#                       SET MULTI           
+#                         ***
+#                         STOP
+##########################################################
+            
+
+def insert_appsinstalled(memc_addr, appsinstalled, dry_run=False):
     ua = appsinstalled_pb2.UserApps()
     ua.lat = appsinstalled.lat
     ua.lon = appsinstalled.lon
@@ -40,17 +137,13 @@ def insert_appsinstalled(memc_pool, memc_addr, appsinstalled, dry_run=False):
         if dry_run:
             logging.debug("%s - %s -> %s" % (memc_addr, key, str(ua).replace("\n", " ")))
         else:
-            try:
-                memc = memc_pool.get(timeout=0.1)
-            except Queue.Empty:
-                memc = memcache.Client([memc_addr], socket_timeout=config['MEMC_TIMEOUT'])
+            memc = memcache.Client([memc_addr], socket_timeout=config['MEMC_TIMEOUT'])
             is_ok = False
             max_retries = config['MEMC_MAX_RETRIES']
             for _ in range(max_retries):
                 is_ok = memc.set(key, packed)
                 if is_ok:
                     break
-            memc_pool.put(memc)
             return is_ok
     except Exception as e:
         logging.exception("Cannot write to memc %s: %s" % (memc_addr, e))
@@ -152,8 +245,8 @@ def threaded_log_processing(fn, options):
     for add_thread in addition_threads:
         add_thread.start()
 
-    # создаем и запускаем threads,
-    # которые запускают обработку частей лога из loglines_queue
+    # создаем и запускаем threads
+    # обработки строк из loglines_queue
     proc_threads = []
     for _ in range(threads_count):
         proc_thread = threading.Thread(target=log2memc, args=(loglines_queue,
