@@ -16,7 +16,6 @@ import requests
 PAUSE_SEC = 60
 DIR_TO_SAVE = 'ycombinator_news'
 URL = 'https://news.ycombinator.com'
-URL_PATTERN = re.compile(r'https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)')
 
 Article = namedtuple('Article', ['id', 'title', 'url'])
 
