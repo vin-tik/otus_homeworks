@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+import aiofiles
+import aiofiles.os
 import argparse
 import asyncio
 from collections import namedtuple
@@ -9,7 +11,6 @@ import glob
 import logging
 from lxml import etree
 import os
-import re
 import requests
 
 
@@ -35,8 +36,7 @@ async def handle_root_page(outdir):
                 for article in articles_from_root
                 if not is_article_processed(article.id, outdir)]
     
-    articles_cnt = len(articles)
-    logging.info(f'New articles count: {articles_cnt}')
+    logging.INFO(f'New articles count: {len(articles)}')
 
     tasks = []
     for article in articles:
@@ -47,17 +47,14 @@ async def handle_root_page(outdir):
 async def download_page(url, dir_to_save, file_name):
     response = await get_response(url)
     filepath = os.path.join(dir_to_save, f'{file_name}')
-    try:
-        with ThreadPoolExecutor() as pool:
-            await asyncio.get_running_loop()\
-                         .run_in_executor(
-                                          pool,
-                                          save_page_as_file,
-                                          str(filepath),
-                                          response.content
-                                        )
-    except Exception as exc:
-        logging.error('Cannot save {filepath}: {exc.args}')
+    with ThreadPoolExecutor() as pool:
+        await asyncio.get_running_loop()\
+                     .run_in_executor(pool,
+                                      save_page_as_file,
+                                      str(filepath),
+                                      response.content
+                                      )
+    logging.INFO(f'{file_name} is saved')
     return response     
 
 async def get_response(url):
@@ -67,12 +64,12 @@ async def get_response(url):
         async with requests.get(url) as response:
             page = await response.content
             return page
-    except Exception as exc:
-        logging.error(f'Downloading error: {url} {exc.args}')
+    except requests.exceptions.RequestException:
+        logging.error(f'Downloading error: {url}')
 
-def save_page_as_file(path, content):
-    with open(path, 'w') as f:
-        f.write(content)
+async def save_page_as_file(path, content):
+    with aiofiles.open(path, 'w') as f:
+        await f.write(content)
         
 def parse_root_page(content):
     root = etree.HTML(content)
@@ -91,8 +88,9 @@ def is_article_processed(article_id, outdir):
 async def handle_article(article, outdir):
     logging.debug(f'Article {article.title} is processing, article id: {article.id}')
     article_dir = os.path.join(outdir, article.id)
-    if not os.path.exists(article_dir):
-        os.path.mkdir(article_dir)
+    
+    if not await aiofiles.os.path.exists(article_dir):
+        await aiofiles.os.mkdir(article_dir)
     try:
         await asyncio.gather(*[
             download_page(article.url, article_dir, 'article'),
