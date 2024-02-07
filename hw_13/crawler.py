@@ -36,7 +36,7 @@ async def handle_root_page(outdir):
                 for article in articles_from_root
                 if not is_article_processed(article.id, outdir)]
     
-    logging.INFO(f'New articles count: {len(articles)}')
+    logging.info(f'New articles count: {len(articles)}')
 
     tasks = []
     for article in articles:
@@ -54,11 +54,11 @@ async def download_page(url, dir_to_save, file_name):
                                       str(filepath),
                                       response.content
                                       )
-    logging.INFO(f'{file_name} is saved')
+    logging.info(f'{file_name} is saved')
     return response     
 
 async def get_response(url):
-    logging.INFO(f'Download article: {url}')
+    logging.info(f'Download article: {url}')
     
     try:
         async with requests.get(url) as response:
@@ -103,7 +103,7 @@ async def handle_comments(article_url, article_id, article_dir):
     article_full_url = f'{article_url}/item?id={article_id}'
     response = await download_page(article_full_url, article_dir, 'first_layer')
     links = get_links_from_comments(response.content)
-    logging.INFO(f'There are {len(links)} links in the comments of {article_full_url}')
+    logging.info(f'There are {len(links)} links in the comments of {article_full_url}')
     tasks = []
     for idx, link in enumerate(links):
         tasks.append(asyncio.create_task(download_page(link, article_dir, f'comment_{idx}')))
